@@ -187,7 +187,7 @@ function ownClient_(who, clientId) {
 }
 
 const WRITE_ACTIONS = ["client.add", "client.update", "program.save", "program.activate", "template.save", "template.assign", "template.delete",
-  "exercise.save", "session.save", "measure.add", "notifications.read", "import", "check", "video.import", "video.stop"];
+  "exercise.save", "session.save", "measure.add", "notifications.read", "import", "check", "video.import", "video.stop", "video.restore"];
 
 const ACTIONS = {
   ping:() => ({pong:true, version:VERSION}),
@@ -211,7 +211,9 @@ const ACTIONS = {
   "check":(req, who) => { coachOnly_(who); return checkAll_(); },
   "video.import":(req, who) => { coachOnly_(who); return startVideoImport_(); },
   "video.status":(req, who) => { coachOnly_(who); return videoJobInfo_(); },
-  "video.stop":(req, who) => { coachOnly_(who); return stopVideoImport_(); }
+  "video.stop":(req, who) => { coachOnly_(who); return stopVideoImport_(); },
+  "video.stream":(req, who) => yandexStream_(libraryVideo_(req.url)),
+  "video.restore":(req, who) => { coachOnly_(who); stopVideoImport_(); return restoreYandexLinks_(); }
 };
 
 // ───────────────────────── таблицы и настройки ─────────────────────────
@@ -544,6 +546,75 @@ function saveExercise_(ex) {
   const vid = driveId_(ex.videoUrl);
   if (vid && (!cur || cur.videoUrl !== ex.videoUrl)) { try { protectVideo_(vid); } catch (e) { /* файл не тренера — оставляем как есть */ } }
   return {id, name:row[1], muscle:ex.muscle || null, equipment:ex.equipment || null, type:row[4], videoUrl:ex.videoUrl || null, cues:ex.cues || null};
+}
+
+// ───────────────────────── видео с Яндекс Диска в плеере приложения ─────────────────────────
+// Яндекс Диск сам пережимает ролики в поток HLS (240p–1080p). Страницу ролика нельзя встроить в чужое окно,
+// а сам поток Яндекс отдаёт любому сайту. Сервер берёт адрес потока со страницы ролика,
+// приложение играет его своим плеером. Ролики остаются на Яндекс Диске тренера.
+
+const YA_UA = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0 Safari/537.36";
+
+// поток отдаём только для роликов из библиотеки — сервер не должен открывать что угодно по просьбе приложения
+function libraryVideo_(url) {
+  url = String(url || "").trim();
+  if (!url || !exercises_().some(e => e.videoUrl === url)) fail_("Этого видео нет в библиотеке", "not_found");
+  return url;
+}
+// JSON-объект, начинающийся в html с позиции start (учитывая строки в кавычках)
+function jsonAt_(html, start) {
+  let depth = 0, inStr = false;
+  for (let i = start; i < html.length; i++) {
+    const ch = html[i];
+    if (inStr) { if (ch === "\\") i++; else if (ch === "\"") inStr = false; continue; }
+    if (ch === "\"") inStr = true;
+    else if (ch === "{" || ch === "[") depth++;
+    else if (ch === "}" || ch === "]") { depth--; if (depth === 0) return JSON.parse(html.slice(start, i + 1)); }
+  }
+  return null;
+}
+function yandexStream_(publicUrl) {
+  const cache = CacheService.getScriptCache();
+  const key = "ys:" + Utilities.base64EncodeWebSafe(Utilities.computeDigest(Utilities.DigestAlgorithm.MD5, publicUrl));
+  const hit = cache.get(key);
+  if (hit) return JSON.parse(hit);
+  // Яндекс изредка отдаёт серверам Google страницу без потока — пробуем ещё раз
+  let html = "", at = -1;
+  for (let attempt = 0; attempt < 3 && at < 0; attempt++) {
+    if (attempt) Utilities.sleep(700 * attempt);
+    const r = UrlFetchApp.fetch(publicUrl, {muteHttpExceptions:true, followRedirects:true, headers:{"User-Agent":YA_UA, "Accept-Language":"ru"}});
+    const code = r.getResponseCode();
+    if (code === 404) fail_("Ссылка на видео не открывается — тренеру нужно заменить её в библиотеке", "not_found");
+    if (code !== 200) { if (attempt === 2) fail_("Яндекс Диск не ответил (" + code + "), попробуйте позже", "yandex"); continue; }
+    html = r.getContentText();
+    at = html.indexOf("\"videoStreams\":");
+    if (at < 0 && /"isAvailableForVideoPlayer":false/.test(html)) break;
+  }
+  if (at < 0) {
+    if (/captcha/i.test(html)) fail_("Яндекс Диск просит подтвердить, что запрос не от робота. Попробуйте через минуту", "yandex");
+    fail_("Яндекс Диск ещё готовит это видео к просмотру. Попробуйте позже", "not_ready");
+  }
+  const vs = jsonAt_(html, html.indexOf("{", at));
+  const streams = ((vs && vs.videos) || []).filter(v => /\.m3u8(\?|$)/.test(v.url || "")).map(v => ({q:v.dimension, url:v.url}));
+  if (!streams.length) fail_("Яндекс Диск ещё готовит это видео к просмотру. Попробуйте позже", "not_ready");
+  const pm = html.match(/"defaultPreview":"(https:[^"]+)"/);
+  const out = {streams:streams, duration:vs.duration || null, poster:pm ? pm[1].replace(/\\u002F/g, "/") : null};
+  cache.put(key, JSON.stringify(out), 3600);   // адреса потока подписаны и живут несколько часов — держим час
+  return out;
+}
+// Вернуть в библиотеку ссылки на Яндекс Диск вместо копий на Google Диске (старая ссылка записана в примечании ячейки)
+function restoreYandexLinks_() {
+  const lock = LockService.getScriptLock(); lock.waitLock(30000);
+  try {
+    const sh = sheet_(master_(), SH.EX, H.EX), col = H.EX.indexOf("Видео") + 1;
+    let n = 0;
+    exercises_().forEach(e => {
+      if (!driveId_(e.videoUrl)) return;
+      const cell = sh.getRange(e._row, col), m = String(cell.getNote() || "").match(/Было:\s*(https?:\/\/\S+)/);
+      if (m && isYandex_(m[1])) { cell.setValue(m[1]); cell.setNote(""); n++; }
+    });
+    return {restored:n};
+  } finally { lock.releaseLock(); }
 }
 
 // ───────────────────────── видео на Google Диске ─────────────────────────
@@ -1004,7 +1075,6 @@ function onOpen() {
       .addItem("Настроить", "setup")
       .addItem("Как опубликовать сервер", "showHelp")
       .addItem("Проверить окончания программ", "dailyCheck")
-      .addItem("Перенести видео с Яндекс Диска на Google Диск", "importVideos")
       .addToUi();
   } catch (e) { /* без интерфейса */ }
 }

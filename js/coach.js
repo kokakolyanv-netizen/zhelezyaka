@@ -249,31 +249,11 @@ function library() {
   const nVid = list.filter(e => e.videoUrl && e.videoStatus !== "broken").length;
   return `<div class="nav"><h3 class="d">Библиотека</h3><a class="btn" style="padding:9px 12px" href="#ex/new">${ic("plus")}Новое</a></div>
     <div class="small muted" style="margin-bottom:8px">${list.length} упражнений, видео у ${nVid}. Хранится в мастер-таблице на листе «Упражнения».</div>
-    ${videoCard(list)}
+
     <input class="fi" id="lib-q" type="search" placeholder="Найти упражнение" aria-label="Поиск по библиотеке" style="margin-bottom:10px" value="${esc(U.libQ || "")}">
     <div id="lib-list">${list.map(e => { const st = e.videoStatus === "broken" ? "bad" : e.videoUrl ? "ok" : "";
       return `<a class="lib-item" href="#ex/${esc(e.id)}" data-name="${esc(e.name.toLowerCase())}"><span class="vic ${st}">${ic(st === "bad" ? "x" : e.videoUrl ? "play" : "video")}</span>
         <span><b>${esc(e.name)}</b><small>${esc([e.muscle, e.equipment].filter(Boolean).join(" · ") || "мышцы не указаны")}</small></span><span class="muted">${ic("back", "i flip")}</span></a>`; }).join("")}</div>`;
-}
-// Перенос роликов с Яндекс Диска на Google Диск: там они играют прямо в приложении и не скачиваются
-function videoCard(list) {
-  const v = D().video || {}, onDrive = list.filter(e => driveId(e.videoUrl)).length;
-  const onYa = list.filter(e => /disk\.yandex\.|yadi\.sk/.test(e.videoUrl || "")).length;
-  if (!v.running && !onYa && !(v.failed || []).length) return "";
-  if (v.running) {
-    const pct = v.total ? Math.round(100 * (v.done + (v.cur ? v.cur.pct / 100 : 0)) / v.total) : 0;
-    return `<div class="card stack" style="margin-bottom:12px"><h4>Переношу видео на Google Диск</h4>
-      <div class="bar-p"><i style="width:${pct}%"></i></div>
-      <p class="small muted" style="margin:0">Готово ${v.done} из ${v.total}${v.cur ? ` · сейчас «${esc(v.cur.name)}», ${v.cur.pct}%` : ""}${v.speed ? ` · ${v.speed} КБ/с` : ""}. Перенос идёт на сервере сам, приложение можно закрыть.</p>
-      ${v.pauseUntil ? `<p class="small" style="margin:0">Яндекс Диск ограничивает частые скачивания. Продолжу сам в ${new Date(v.pauseUntil).toLocaleTimeString("ru-RU", {hour:"2-digit", minute:"2-digit"})}.</p>` : ""}</div>`;
-  }
-  const failed = v.failed || [];
-  return `<div class="card stack" style="margin-bottom:12px"><h4>Видео в приложении</h4>
-    <p class="small muted" style="margin:0">На Google Диске: ${onDrive}, на Яндекс Диске: ${onYa}. С Google Диска ролик играет прямо в приложении, а скачать его нельзя. Ролики с Яндекс Диска открываются в браузере, и их можно скачать.</p>
-    ${onYa ? `<button class="btn block" data-act="video-import" ${busy("video.import")}>${ic("cloud")}${S.ui.busy === "video.import" ? "Запускаю…" : `Перенести ${onYa} на Google Диск`}</button>
-    <p class="small muted" style="margin:0">Ролики лягут в папку «Железяка — видео» на вашем Диске. Это займёт около получаса и место на Диске.</p>` : ""}
-    ${failed.length ? `<details class="note"><summary>Не перенеслось: ${failed.length}</summary><ul class="small">${failed.map(f => `<li>${esc(f.why)} — <a href="${esc(f.url)}" target="_blank" rel="noopener">${esc(f.url.replace(/^https?:\/\//, ""))}</a></li>`).join("")}</ul>
-      <p class="small muted">Скачайте такой ролик, положите в папку «Железяка — видео» на Диске и вставьте ссылку на него в упражнение.</p></details>` : ""}</div>`;
 }
 function exEdit(id) {
   const cur = id && id !== "new" ? exById().get(id) : null;
@@ -284,7 +264,7 @@ function exEdit(id) {
     <div class="stack">
       <input class="fi" id="lf-name" value="${esc(d.name || "")}" placeholder="Название, например «Тяга Т-грифа»" aria-label="Название упражнения">
       <div><h4>Видео</h4>${cur && cur.videoUrl ? videoBlock(cur) : ""}
-        <input class="fi" id="lf-url" style="margin-top:8px" value="${esc(d.videoUrl || "")}" placeholder="Ссылка на видео в Google Диске или файл .mp4" aria-label="Ссылка на видео">
+        <input class="fi" id="lf-url" style="margin-top:8px" value="${esc(d.videoUrl || "")}" placeholder="Ссылка на видео на Яндекс Диске" aria-label="Ссылка на видео">
         <p class="small muted" style="margin:6px 0 0">Ссылка на файл .mp4 будет играть прямо в приложении. Остальные ссылки откроются в браузере.</p></div>
       <div><h4>Мышцы</h4><div class="chipset">${chips("muscle", MUSCLES)}</div></div>
       <div><h4>Оборудование</h4><div class="chipset">${chips("equipment", EQUIP)}</div></div>
@@ -377,7 +357,6 @@ function addOrReplace(pk, ex) {
 
 export const ACTIONS = {
   "notif-read":async () => { try { const r = await act("notifications.read"); S.data.notifications = r.notifications; } catch (e) { /* */ } },
-  "video-import":async () => { try { S.data.video = await act("video.import", {}, "Перенос видео запущен: идёт на сервере сам"); } catch (e) { /* показано */ } },
   "c-add":async () => {
     const name = (document.getElementById("c-name") || {}).value.trim(), contact = (document.getElementById("c-contact") || {}).value.trim();
     if (!name) { toast("Впишите имя"); return; }

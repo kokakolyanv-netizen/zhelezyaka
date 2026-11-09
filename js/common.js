@@ -81,14 +81,16 @@ export function secTag(kind, title) {
 }
 const direct = u => /\.(mp4|webm|m4v)(\?|$)/i.test(u || "");
 export const driveId = u => { const m = String(u || "").match(/drive\.google\.com\/(?:file\/d\/|open\?id=|uc\?(?:[^#]*&)?id=)([\w-]{20,})/); return m ? m[1] : null; };
+export const isYandex = u => /^https?:\/\/(disk\.yandex\.[a-z]+|yadi\.sk)\//i.test(String(u || ""));
+const BARS = `<div class="bars" aria-hidden="true"><div class="bb"><b></b><i class="p10"></i><i class="p15"></i><i class="p20"></i><i class="p25"></i><s></s><i class="p25"></i><i class="p20"></i><i class="p15"></i><i class="p10"></i></div></div>`;
 export function videoBlock(ex) {
-  const vid = ex && driveId(ex.videoUrl);
-  if (vid) return `<button class="video drive" data-act="video-open" data-vid="${esc(vid)}" data-title="${esc(ex.name || "")}" aria-label="Смотреть видео: ${esc(ex.name || "")}">
-    <span class="vthumb" style="background-image:url('https://drive.google.com/thumbnail?id=${esc(vid)}&sz=w720')"></span>
+  const vid = ex && driveId(ex.videoUrl), ya = ex && ex.videoStatus !== "broken" && isYandex(ex.videoUrl);
+  if (vid || ya) return `<button class="video drive" data-act="video-open" ${vid ? `data-vid="${esc(vid)}"` : `data-src="${esc(ex.videoUrl)}"`} data-title="${esc(ex.name || "")}" aria-label="Смотреть видео: ${esc(ex.name || "")}">
+    ${vid ? `<span class="vthumb" style="background-image:url('https://drive.google.com/thumbnail?id=${esc(vid)}&sz=w720')"></span>` : BARS}
     <span class="vplay">${ic("play")}</span><span class="vmeta"><span class="tag light">Видео тренера</span><span class="vnote">Нажмите, чтобы посмотреть технику</span></span></button>`;
   if (ex && ex.videoUrl && direct(ex.videoUrl)) return `<div class="video" data-st="ready"><video src="${esc(ex.videoUrl)}" controls loop muted playsinline preload="metadata"></video></div>`;
   const st = !ex || !ex.videoUrl ? "none" : ex.videoStatus === "broken" ? "broken" : "source";
-  const txt = {source:["Видео тренера", "Откроется в новой вкладке. Ролик в формате mp4 будет играть прямо здесь."], broken:["Ссылка не открывается", "Тренеру нужно заменить видео в библиотеке."], none:["Видео пока нет", "Тренер может добавить его в библиотеке."]}[st];
+  const txt = {source:["Видео тренера", "Откроется в новой вкладке."], broken:["Ссылка не открывается", "Тренеру нужно заменить видео в библиотеке."], none:["Видео пока нет", "Тренер может добавить его в библиотеке."]}[st];
   return `<div class="video" data-st="${st}"><div class="bars" aria-hidden="true"><div class="bb"><b></b><i class="p10"></i><i class="p15"></i><i class="p20"></i><i class="p25"></i><s></s><i class="p25"></i><i class="p20"></i><i class="p15"></i><i class="p10"></i></div></div>
     <div class="vmeta"><span class="tag light">${esc(txt[0])}</span>
       ${ex && ex.videoUrl && st !== "broken" ? `<a class="vlink" href="${esc(ex.videoUrl)}" target="_blank" rel="noopener">${ic("ext")}Смотреть видео</a>` : ""}

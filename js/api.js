@@ -141,6 +141,7 @@ export class DemoApi {
       case "check": coach(); { const msgs = this.db.clients.map(c => this.notify(c) && c.name).filter(Boolean); out = {checked:this.db.clients.length, messages:msgs}; } break;
       case "import": coach(); out = {exercisesAdded:0, report:["В демо-режиме данные уже загружены"]}; break;
       case "video.import": case "video.status": coach(); throw new Error("В демо-режиме видео не переносится");
+      case "video.stream": throw new Error("В демо-режиме видео открывается на Яндекс Диске.");
       default: throw new Error("Неизвестное действие: " + action);
     }
     this.save();

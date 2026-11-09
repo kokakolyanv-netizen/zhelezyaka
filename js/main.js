@@ -191,25 +191,110 @@ async function refresh(manual) {
 setInterval(() => refresh(false), 90000);
 
 /* ───────── плеер видео ───────── */
-// Ролик с Google Диска во встроенном плеере Диска. Кнопку «открыть в новом окне» в углу плеера
-// закрывает прозрачная накладка, скачивание запрещено настройкой самого файла на Диске.
-function openPlayer(vid, title) {
-  const box = $("#player"); if (!box || !vid) return;
+// Ролики лежат на Яндекс Диске тренера. Яндекс сам пережимает их в поток HLS; адрес потока со страницы ролика
+// достаёт сервер (страницу Яндекса нельзя встроить в чужое окно), а играет его плеер приложения.
+// Скачать из плеера нельзя: ни кнопки, ни пункта меню, поток идёт кусочками по 5 секунд.
+const HLS_JS = "https://cdn.jsdelivr.net/npm/hls.js@1.5.17/dist/hls.min.js";
+const streams = new Map();            // адрес ролика → {at, info}: адреса потока живут несколько часов
+let hls = null, playerToken = 0;
+let hlsLoading = null;
+function loadHls() {
+  if (window.Hls) return Promise.resolve();
+  if (!hlsLoading) hlsLoading = new Promise((ok, bad) => {
+    const s = document.createElement("script"); s.src = HLS_JS; s.onload = ok;
+    s.onerror = () => { hlsLoading = null; s.remove(); bad(new Error("Не загрузился плеер видео")); };
+    document.head.appendChild(s);
+  });
+  return hlsLoading;
+}
+const inflight = new Map();          // запросы адреса потока, которые уже идут
+function streamInfo(src) {
+  const c = streams.get(src);
+  if (c && Date.now() - c.at < 40 * 60000) return Promise.resolve(c.info);
+  if (inflight.has(src)) return inflight.get(src);
+  const p = (async () => {
+    let info;
+    try { info = await call("video.stream", {url:src}); }
+    catch (e) {   // Яндекс изредка отвечает серверу без потока — одна повторная попытка
+      if (!["not_ready", "yandex"].includes(e.code)) throw e;
+      await new Promise(r => setTimeout(r, 1500));
+      info = await call("video.stream", {url:src});
+    }
+    streams.set(src, {at:Date.now(), info});
+    return info;
+  })().finally(() => inflight.delete(src));
+  inflight.set(src, p);
+  return p;
+}
+// Экран с видео открыт — заранее узнаём адрес потока и грузим плеер, чтобы «плей» срабатывал сразу
+function prefetchVideos() {
+  if (!S.auth || !S.api || !S.online) return;
+  const els = document.querySelectorAll('#app [data-act="video-open"][data-src]');
+  if (!els.length) return;
+  els.forEach(el => { streamInfo(el.dataset.src).catch(() => null); });
+  if (!isIOS()) loadHls().catch(() => null);
+}
+function playerShell(title, inner) {
+  const box = $("#player");
   box.innerHTML = `<div class="pl-top"><b>${esc(title || "Видео")}</b><button class="icon-btn" data-act="video-close" aria-label="Закрыть">${ic("x")}</button></div>
-    <div class="pl-frame"><iframe src="https://drive.google.com/file/d/${encodeURIComponent(vid)}/preview" allow="autoplay; fullscreen" allowfullscreen referrerpolicy="no-referrer" title="${esc(title || "Видео")}"></iframe>
-    <div class="pl-shield" aria-hidden="true"></div></div>
-    ${S.online ? "" : `<p class="small" style="margin:0;text-align:center">Нет сети: видео играет только при подключении к интернету.</p>`}`;
+    <div class="pl-frame">${inner}</div><p class="pl-msg small" id="pl-msg"></p>`;
   box.hidden = false;
   document.body.classList.add("noscroll");
+  return box;
+}
+const playerMsg = (text, link) => { const m = $("#pl-msg"); if (m) m.innerHTML = esc(text || "") + (link ? ` <a href="${esc(link)}" target="_blank" rel="noopener">Открыть на Яндекс Диске</a>` : ""); };
+async function openPlayer(d) {
+  const title = d.title || "Видео", token = ++playerToken;
+  if (d.vid) {   // Google Диск: его встроенный плеер (за пределами России)
+    playerShell(title, `<iframe src="https://drive.google.com/file/d/${encodeURIComponent(d.vid)}/preview" allow="autoplay; fullscreen" allowfullscreen referrerpolicy="no-referrer" title="${esc(title)}"></iframe><div class="pl-shield" aria-hidden="true"></div>`);
+    return;
+  }
+  playerShell(title, `<video id="pl-v" playsinline controls loop muted autoplay preload="auto" controlsList="nodownload noremoteplayback noplaybackrate" disablePictureInPicture disableRemotePlayback></video><div class="pl-wait" id="pl-wait"><span class="spin"></span>Загружаю видео…</div>`);
+  const v = $("#pl-v");
+  v.addEventListener("contextmenu", e => e.preventDefault());
+  v.addEventListener("playing", () => { const w = $("#pl-wait"); if (w) w.remove(); playerMsg(v.muted ? "Звук включается в плеере." : ""); });
+  if (!S.online) { playerMsg("Нет сети: видео играет только при подключении к интернету."); return; }
+  try {
+    const info = await streamInfo(d.src);
+    if (token !== playerToken) return;
+    const pick = q => (info.streams || []).find(s => s.q === q);
+    // стартовое качество по скорости связи: медленная — 360p, средняя — 480p, хорошая — 720p
+    const conn = navigator.connection || {}, slow = conn.saveData || /2g$/.test(conn.effectiveType || "");
+    const want = slow ? 360 : conn.downlink && conn.downlink < 2.5 ? 480 : 720;
+    const best = pick("adaptive") || pick("480p") || info.streams[0];
+    // iPhone играет такой поток сам. Остальным браузерам — hls.js: встроенный HLS в Chrome стартует с задержкой
+    const native = v.canPlayType("application/vnd.apple.mpegurl"), mse = window.MediaSource || window.ManagedMediaSource;
+    if (native && (isIOS() || !mse)) v.src = ((slow ? null : pick(want + "p")) || best).url;   // сам начинает с низкого качества — сразу даём нужное
+    else {
+      await loadHls();
+      if (token !== playerToken) return;
+      if (!window.Hls || !window.Hls.isSupported()) throw new Error("Этот браузер не умеет играть видео");
+      hls = new window.Hls({maxBufferLength:20});
+      // начинаем с выбранного качества, дальше hls.js подстраивается под связь сам
+      hls.on(window.Hls.Events.MANIFEST_PARSED, (e, data) => {
+        const lv = (data && data.levels) || [];
+        let i = lv.findIndex(l => l.height >= want); if (i < 0) i = lv.length - 1;
+        if (i >= 0) hls.startLevel = i;
+      });
+      hls.on(window.Hls.Events.ERROR, (e, data) => { if (data && data.fatal) { playerMsg("Видео не загрузилось. Проверьте интернет и попробуйте ещё раз.", d.src); streams.delete(d.src); } });
+      hls.loadSource(best.url); hls.attachMedia(v);
+    }
+    v.play().catch(() => { /* браузер ждёт нажатия на «плей» */ });
+  } catch (e) {
+    if (token !== playerToken) return;
+    const w = $("#pl-wait"); if (w) w.remove();
+    playerMsg(e instanceof NetError ? "Нет связи с сервером." : e.message, d.src);
+  }
 }
 function closePlayer() {
-  const box = $("#player"); if (!box) return;
+  const box = $("#player"); if (!box || box.hidden) return;
+  playerToken++;
+  if (hls) { try { hls.destroy(); } catch (e) { /* уже закрыт */ } hls = null; }
   box.hidden = true; box.innerHTML = "";
   document.body.classList.remove("noscroll");
 }
 document.addEventListener("keydown", e => { if (e.key === "Escape") closePlayer(); });
 window.addEventListener("hashchange", closePlayer);
-setInterval(() => { if (S.auth && S.auth.role === "coach" && S.data && S.data.video && S.data.video.running && route().name === "library") refresh(false); }, 15000);
 
 /* ───────── настройки ───────── */
 function settings() {
@@ -272,6 +357,7 @@ function render() {
   scr2.scrollTop = scrollMem[key] || 0;
   lastKey = key;
   if (mod.afterRender) mod.afterRender();
+  setTimeout(prefetchVideos, 0);
 }
 setRenderer(render);
 // фоновые перерисовки (синхронизация, таймеры) не сбивают ввод
@@ -296,7 +382,7 @@ const MAIN_ACTIONS = {
     try { await e.prompt(); await e.userChoice; } catch (err) { /* закрыли окно */ }
   },
   "install-hide":() => { lsSet("installHide", true); },
-  "video-open":d => openPlayer(d.vid, d.title),
+  "video-open":d => openPlayer(d),
   "video-close":() => closePlayer(),
   sync:() => flush(),
   "share-app":() => shareOrCopy("Железяка", "Приложение для тренировок. Открой ссылку и войди кодом, который я пришлю.", inviteLink(null)),
