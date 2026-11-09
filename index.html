@@ -1,0 +1,30 @@
+<!doctype html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<title>Железяка</title>
+<meta name="description" content="Тренировки от тренера: программа, подходы, прогресс и замеры">
+<meta name="theme-color" content="#E7EAEE" media="(prefers-color-scheme: light)">
+<meta name="theme-color" content="#0C0E11" media="(prefers-color-scheme: dark)">
+<link rel="manifest" href="manifest.webmanifest">
+<link rel="icon" href="icons/icon.svg" type="image/svg+xml">
+<link rel="apple-touch-icon" href="icons/apple-touch-icon.png">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="default">
+<meta name="apple-mobile-web-app-title" content="Железяка">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Unbounded:wght@600;700&family=Onest:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap">
+<link rel="stylesheet" href="css/app.css">
+</head>
+<body>
+<div class="app" id="app"><main class="scr"><div class="boot"><div class="mark" aria-hidden="true"><i></i><i></i><i></i><i></i></div></div></main></div>
+<div class="toast" id="toast" role="status" aria-live="polite"></div>
+<div class="copybox" id="copybox" hidden><div class="card stack"><b>Скопируйте и отправьте</b><textarea class="fi" readonly rows="6" aria-label="Текст приглашения"></textarea><button class="btn" data-act="copy-close">Готово</button></div></div>
+<noscript>Для работы приложения нужен JavaScript.</noscript>
+<script src="config.js"></script>
+<script type="module" src="js/main.js"></script>
+</body>
+</html>
