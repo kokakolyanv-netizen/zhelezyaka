@@ -264,7 +264,8 @@ function videoCard(list) {
     const pct = v.total ? Math.round(100 * (v.done + (v.cur ? v.cur.pct / 100 : 0)) / v.total) : 0;
     return `<div class="card stack" style="margin-bottom:12px"><h4>Переношу видео на Google Диск</h4>
       <div class="bar-p"><i style="width:${pct}%"></i></div>
-      <p class="small muted" style="margin:0">Готово ${v.done} из ${v.total}${v.cur ? ` · сейчас «${esc(v.cur.name)}», ${v.cur.pct}%` : ""}. Перенос идёт на сервере сам, приложение можно закрыть.</p></div>`;
+      <p class="small muted" style="margin:0">Готово ${v.done} из ${v.total}${v.cur ? ` · сейчас «${esc(v.cur.name)}», ${v.cur.pct}%` : ""}${v.speed ? ` · ${v.speed} КБ/с` : ""}. Перенос идёт на сервере сам, приложение можно закрыть.</p>
+      ${v.pauseUntil ? `<p class="small" style="margin:0">Яндекс Диск ограничивает частые скачивания. Продолжу сам в ${new Date(v.pauseUntil).toLocaleTimeString("ru-RU", {hour:"2-digit", minute:"2-digit"})}.</p>` : ""}</div>`;
   }
   const failed = v.failed || [];
   return `<div class="card stack" style="margin-bottom:12px"><h4>Видео в приложении</h4>

@@ -187,7 +187,7 @@ function ownClient_(who, clientId) {
 }
 
 const WRITE_ACTIONS = ["client.add", "client.update", "program.save", "program.activate", "template.save", "template.assign", "template.delete",
-  "exercise.save", "session.save", "measure.add", "notifications.read", "import", "check", "video.import"];
+  "exercise.save", "session.save", "measure.add", "notifications.read", "import", "check", "video.import", "video.stop"];
 
 const ACTIONS = {
   ping:() => ({pong:true, version:VERSION}),
@@ -210,7 +210,8 @@ const ACTIONS = {
   "import":(req, who) => { coachOnly_(who); return importSeed_(req.seed); },
   "check":(req, who) => { coachOnly_(who); return checkAll_(); },
   "video.import":(req, who) => { coachOnly_(who); return startVideoImport_(); },
-  "video.status":(req, who) => { coachOnly_(who); return videoJobInfo_(); }
+  "video.status":(req, who) => { coachOnly_(who); return videoJobInfo_(); },
+  "video.stop":(req, who) => { coachOnly_(who); return stopVideoImport_(); }
 };
 
 // ───────────────────────── таблицы и настройки ─────────────────────────
@@ -552,7 +553,9 @@ function saveExercise_(ex) {
 // и грузятся на Диск возобновляемой загрузкой, поэтому лимит Apps Script в 50 МБ на ответ не мешает.
 
 const VIDEO_FOLDER_NAME = "Железяка — видео";
-const VIDEO_CHUNK = 32 * 1024 * 1024;          // кратно 256 КБ — так требует Google Drive
+const VIDEO_PART = 8 * 1024 * 1024;           // часть файла: кратно 256 КБ — так требует Google Drive
+const VIDEO_PARALLEL = 3;                      // столько частей качаем с Яндекса одновременно
+const VIDEO_PAUSE_MIN = 10;                    // пауза, если Яндекс отвечает «слишком много запросов»
 const VIDEO_BUDGET_MS = 4.5 * 60 * 1000;
 
 function isYandex_(u) { return /^https?:\/\/(disk\.yandex\.[a-z]+|yadi\.sk)\//i.test(String(u || "")); }
@@ -583,6 +586,7 @@ function protectVideo_(id) {
 function fetchJson_(url) {
   const r = UrlFetchApp.fetch(url, {muteHttpExceptions:true}), code = r.getResponseCode();
   if (code === 404) fail_("ссылка не открывается (404)", "skip");
+  if (code === 429 || code >= 500) fail_("Яндекс Диск просит подождать (" + code + ")", "rate");
   if (code !== 200) fail_("Яндекс Диск ответил " + code);
   return JSON.parse(r.getContentText());
 }
@@ -599,15 +603,22 @@ function yandexHref_(publicUrl) {
     const r = UrlFetchApp.fetch(href, {method:"get", followRedirects:false, muteHttpExceptions:true, headers:{Range:"bytes=0-0"}});
     const code = r.getResponseCode(), h = r.getAllHeaders(), loc = h.Location || h.location;
     if (code >= 300 && code < 400 && loc) { href = loc; continue; }
+    if (code === 429) fail_("Яндекс Диск просит подождать (429)", "rate");
     break;
   }
   return href;
 }
-function fetchRange_(href, start, end) {
-  const r = UrlFetchApp.fetch(href, {headers:{Range:"bytes=" + start + "-" + end}, muteHttpExceptions:true});
-  const code = r.getResponseCode(), bytes = r.getContent();
-  if (code === 206 || (code === 200 && start === 0 && bytes.length === end + 1)) return bytes;
-  fail_("Яндекс Диск не отдал часть файла (" + code + ")");
+// Кусок файла [start, end] частями по VIDEO_PART, части качаются одновременно.
+// Части держим как Blob: байты остаются на стороне Google, без огромных JS-массивов (иначе «нехватка памяти»).
+function fetchParts_(href, start, end, size) {
+  const reqs = [];
+  for (let a = start; a <= end; a += VIDEO_PART) reqs.push({url:href, headers:{Range:"bytes=" + a + "-" + Math.min(a + VIDEO_PART - 1, end)}, muteHttpExceptions:true});
+  return UrlFetchApp.fetchAll(reqs).map((r, i) => {
+    const code = r.getResponseCode(), a = start + i * VIDEO_PART, b = Math.min(a + VIDEO_PART - 1, end);
+    if (code === 429) fail_("Яндекс Диск просит подождать (429)", "rate");
+    if (code === 206 || (code === 200 && a === 0 && b === size - 1)) return {blob:r.getBlob(), len:b - a + 1};
+    fail_("Яндекс Диск не отдал часть файла (" + code + ")");
+  });
 }
 function driveUploadStart_(name, mime, size) {
   const r = driveApi_("post", "https://www.googleapis.com/upload/drive/v3/files?uploadType=resumable&fields=id",
@@ -616,10 +627,10 @@ function driveUploadStart_(name, mime, size) {
   const h = r.getAllHeaders();
   return h.Location || h.location;
 }
-// часть файла → Диск. Возвращает id файла, когда загружена последняя часть
-function driveUploadPut_(session, bytes, start, total, mime) {
-  const r = UrlFetchApp.fetch(session, {method:"put", contentType:mime, payload:bytes, muteHttpExceptions:true, followRedirects:false,
-    headers:{Authorization:"Bearer " + ScriptApp.getOAuthToken(), "Content-Range":"bytes " + start + "-" + (start + bytes.length - 1) + "/" + total}});
+// часть файла (Blob длиной len) → Диск. Возвращает id файла, когда загружена последняя часть
+function driveUploadPut_(session, blob, len, start, total, mime) {
+  const r = UrlFetchApp.fetch(session, {method:"put", contentType:mime, payload:blob, muteHttpExceptions:true, followRedirects:false,
+    headers:{Authorization:"Bearer " + ScriptApp.getOAuthToken(), "Content-Range":"bytes " + start + "-" + (start + len - 1) + "/" + total}});
   const code = r.getResponseCode();
   if (code === 308) return null;
   if (code === 200 || code === 201) return JSON.parse(r.getContentText()).id;
@@ -645,37 +656,64 @@ function linkVideo_(url, id) {
 
 function videoJob_() { const s = PropertiesService.getScriptProperties().getProperty("VIDEO_JOB"); return s ? JSON.parse(s) : null; }
 function saveVideoJob_(j) { PropertiesService.getScriptProperties().setProperty("VIDEO_JOB", JSON.stringify(j)); }
+// сохранить состояние, если перенос не перезапустили из приложения (иначе этот запуск тихо уходит)
+function commitVideoJob_(j) {
+  const s = videoJob_();
+  if (s && s.gen !== j.gen) return false;
+  saveVideoJob_(j);
+  return true;
+}
 function videoJobInfo_() {
   const j = videoJob_();
-  if (!j) return {running:false, total:0, done:0, failed:[], cur:null, finished:null};
-  return {running:!!j.running, total:j.total, done:j.done, failed:j.failed, finished:j.finished || null, beat:j.beat || null,
+  const triggers = ScriptApp.getProjectTriggers().filter(t => t.getHandlerFunction() === "videoJob").length;
+  if (!j) return {running:false, total:0, done:0, failed:[], cur:null, finished:null, triggers:triggers};
+  const speed = j.secs ? Math.round(j.bytes / j.secs / 1024) : null;   // КБ/с
+  return {running:!!j.running, total:j.total, done:j.done, failed:j.failed, finished:j.finished || null, beat:j.beat || null, triggers:triggers,
+    pauseUntil:j.pauseUntil && j.pauseUntil > Date.now() ? new Date(j.pauseUntil).toISOString() : null, speed:speed,
     cur:j.cur ? {name:j.cur.name, pct:j.cur.size ? Math.round(100 * j.cur.offset / j.cur.size) : 0} : null};
 }
 function scheduleVideoJob_(sec) {
   ScriptApp.getProjectTriggers().forEach(t => { if (t.getHandlerFunction() === "videoJob") ScriptApp.deleteTrigger(t); });
-  if (sec != null) ScriptApp.newTrigger("videoJob").timeBased().after(sec * 1000).create();
+  if (sec != null) ScriptApp.newTrigger("videoJob").timeBased().after(Math.max(1, Math.round(sec)) * 1000).create();
+}
+function stopVideoImport_() {
+  const j = videoJob_();
+  if (j) { j.running = false; j.gen = "stopped"; saveVideoJob_(j); }
+  scheduleVideoJob_(null);
+  return videoJobInfo_();
 }
 function startVideoImport_() {
-  const cur = videoJob_();
-  if (cur && cur.running && Date.now() - (cur.beat || 0) < 12 * 60 * 1000) return videoJobInfo_();
+  const prev = videoJob_();
   const urls = [];
   exercises_().forEach(e => { if (isYandex_(e.videoUrl) && urls.indexOf(e.videoUrl) < 0) urls.push(e.videoUrl); });
   if (!urls.length) fail_("В библиотеке нет ссылок на Яндекс Диск — переносить нечего");
   videoFolder_();
-  // ссылки, которые уже не удались, в новый запуск не берём — их тренер заменит вручную
-  const failed = (cur && cur.failed) || [], skip = {};
+  // окончательные отказы (папка, мёртвая ссылка) не повторяем; «подождите» от Яндекса — снова в очередь
+  const failed = ((prev && prev.failed) || []).filter(f => !/429|подождать/.test(f.why));
+  const skip = {};
   failed.forEach(f => { skip[f.url] = 1; });
-  const left = urls.filter(u => !skip[u]);
+  let left = urls.filter(u => !skip[u]);
   if (!left.length) fail_("Оставшиеся ссылки на Яндекс Диск не переносятся — замените их в библиотеке");
-  saveVideoJob_({running:true, total:left.length, left:left, done:0, failed:failed, cur:null, beat:Date.now(), started:new Date().toISOString()});
+  // недокачанный файл продолжаем с того же места
+  const cur = prev && prev.cur && left.indexOf(prev.cur.url) >= 0 ? Object.assign({}, prev.cur, {href:null, tries:0}) : null;
+  if (cur) left = [cur.url].concat(left.filter(u => u !== cur.url));
+  saveVideoJob_({gen:Utilities.getUuid(), running:true, total:left.length, left:left, done:0, failed:failed, cur:cur,
+    beat:Date.now(), started:new Date().toISOString(), bytes:0, secs:0, pauseMin:VIDEO_PAUSE_MIN, pauseUntil:0});
   scheduleVideoJob_(1);
   return videoJobInfo_();
+}
+// Яндекс просит подождать: пауза 10 → 20 → 40 → 60 минут, потом снова по 60
+function pauseVideoJob_(j) {
+  const min = j.pauseMin || VIDEO_PAUSE_MIN;
+  j.pauseUntil = Date.now() + min * 60000;
+  j.pauseMin = Math.min(min * 2, 60);
 }
 // Запускается триггером. Переносит ролики, пока есть время, и ставит себе следующий запуск.
 function videoJob() {
   const t0 = Date.now();
   const j = videoJob_();
   if (!j || !j.running) { scheduleVideoJob_(null); return; }
+  if (j.pauseUntil && j.pauseUntil - Date.now() > 5000) { scheduleVideoJob_((j.pauseUntil - Date.now()) / 1000); return; }
   while (Date.now() - t0 < VIDEO_BUDGET_MS) {
     if (!j.cur) {
       if (!j.left.length) { j.running = false; j.finished = new Date().toISOString(); break; }
@@ -683,18 +721,30 @@ function videoJob() {
       try {
         const f = yandexFile_(url);
         j.cur = {url:url, name:f.name, size:f.size, mime:f.mime, offset:0, session:driveUploadStart_(f.name, f.mime, f.size), href:null, tries:0};
-      } catch (e) { j.failed.push({url:url, why:short_(e)}); j.left.shift(); }
-      j.beat = Date.now(); saveVideoJob_(j);
+      } catch (e) {
+        if (e.code === "rate") { pauseVideoJob_(j); break; }
+        j.failed.push({url:url, why:short_(e)}); j.left.shift();
+      }
+      j.beat = Date.now();
+      if (!commitVideoJob_(j)) return;
       continue;
     }
-    const c = j.cur;
+    const c = j.cur, t1 = Date.now();
     try {
       if (!c.href) c.href = yandexHref_(c.url);
-      const end = Math.min(c.offset + VIDEO_CHUNK, c.size) - 1;
-      const id = driveUploadPut_(c.session, fetchRange_(c.href, c.offset, end), c.offset, c.size, c.mime);
-      c.offset = end + 1;
+      const end = Math.min(c.offset + VIDEO_PART * VIDEO_PARALLEL, c.size) - 1;
+      const parts = fetchParts_(c.href, c.offset, end, c.size);
+      let id = null;
+      for (let i = 0; i < parts.length && !id; i++) {
+        id = driveUploadPut_(c.session, parts[i].blob, parts[i].len, c.offset, c.size, c.mime);
+        c.offset += parts[i].len;
+        j.bytes = (j.bytes || 0) + parts[i].len;
+      }
+      j.secs = (j.secs || 0) + (Date.now() - t1) / 1000;
+      j.pauseMin = VIDEO_PAUSE_MIN;
       if (id) finishVideo_(j, id);
     } catch (e) {
+      if (e.code === "rate") { pauseVideoJob_(j); break; }
       c.tries = (c.tries || 0) + 1; c.href = null;
       let st = null;
       try { st = driveUploaded_(c.session, c.size); } catch (e2) { st = null; }
@@ -702,10 +752,12 @@ function videoJob() {
       else if (st) c.offset = st.offset;
       if (j.cur && c.tries >= 4) { j.failed.push({url:c.url, why:short_(e)}); j.left.shift(); j.cur = null; }
     }
-    j.beat = Date.now(); saveVideoJob_(j);
+    j.beat = Date.now();
+    if (!commitVideoJob_(j)) return;
   }
-  saveVideoJob_(j);
-  scheduleVideoJob_(j.running ? 20 : null);
+  if (!commitVideoJob_(j)) return;
+  if (!j.running) scheduleVideoJob_(null);
+  else scheduleVideoJob_(j.pauseUntil > Date.now() ? (j.pauseUntil - Date.now()) / 1000 : 20);
 }
 function finishVideo_(j, id) {
   try { protectVideo_(id); } catch (e) { /* доступ поправится при следующем сохранении упражнения */ }
