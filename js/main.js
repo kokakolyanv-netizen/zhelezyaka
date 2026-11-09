@@ -6,6 +6,7 @@ import {$, esc, ic, toast, lsGet, lsSet, mmss, shareOrCopy, inviteLink, appUrl, 
 import * as ACC from "./accounts.js";
 import * as A from "./athlete.js";
 import * as C from "./coach.js";
+import {helpScreen} from "./help.js";
 
 const CFG = window.PODHOD || {};
 const role = () => (S.auth && S.auth.role === "coach" ? C : A);
@@ -81,6 +82,7 @@ function loginScreen() {
     </div>
     ${CFG.demo === false ? "" : `<div class="card stack"><h4>Попробовать без настройки</h4><p class="small muted" style="margin:0">Демо на программах Николая. Данные хранятся только в этом браузере.</p>
       <div class="row"><button class="btn ghost" style="flex:1" data-act="demo" data-code="2468">${ic("lift")}Я подопечный</button><button class="btn ghost" style="flex:1" data-act="demo" data-code="0000">${ic("users")}Я тренер</button></div></div>`}
+    ${adding ? "" : `<a class="guide" href="#help">Как пользоваться приложением</a>`}
     ${!adding && CFG.guideUrl ? `<a class="guide" href="${esc(CFG.guideUrl)}" target="_blank" rel="noopener">Я тренер: как подключить свои Google Таблицы</a>` : ""}
   </div>`;
 }
@@ -310,6 +312,7 @@ function settings() {
           <button class="btn ghost" style="flex:1" data-act="refresh" ${S.refreshing ? "disabled" : ""}>${ic("sync")}${S.refreshing ? "Обновляю…" : "Обновить из таблицы"}</button>
           ${S.queue.length ? `<button class="btn ghost" style="flex:1" data-act="sync">${ic("cloud")}Отправить</button>` : ""}</div></div>
       ${a.mode !== "demo" ? `<div class="card"><h4>Сервер</h4><p class="small mono" style="word-break:break-all;margin:0">${esc(a.server || "")}</p></div>` : ""}
+      <a class="btn ghost block" href="#help">${ic("book")}Как пользоваться</a>
       ${installCard()}
       ${coach ? `<div class="card stack"><h4>Тренеру</h4>
         <button class="btn ghost block" data-act="check" ${S.ui.busy === "check" ? "disabled" : ""}>${ic("bell")}Проверить, у кого заканчивается программа</button>
@@ -340,14 +343,18 @@ function render() {
   const a = document.activeElement;
   if (render.soft && a && app.contains(a) && /^(INPUT|TEXTAREA|SELECT)$/.test(a.tagName)) { render.soft = false; render.pending = true; return; }
   render.soft = false;
-  if (!S.auth || S.adding) { app.innerHTML = `<main class="scr" id="scr">${loginScreen()}</main>`; lastKey = ""; return; }
+  if (!S.auth || S.adding) {
+    const help = route().name === "help";
+    app.innerHTML = `<main class="scr" id="scr">${help ? `<div class="page">${helpScreen(null, "#")}</div>` : loginScreen()}</main>`;
+    lastKey = ""; return;
+  }
   const r = route(), mod = role();
-  const name = r.name === "settings" || mod.SCREENS[r.name] ? r.name : mod.DEFAULT;
+  const name = r.name === "settings" || r.name === "help" || mod.SCREENS[r.name] ? r.name : mod.DEFAULT;
   const key = name + "/" + (r.arg || "");
   const scr = $("#scr");
   if (scr && lastKey) scrollMem[lastKey] = scr.scrollTop;
   const top = name === mod.DEFAULT ? whoBar() + installBanner() : "";
-  const body = top + (name === "settings" ? settings() : mod.SCREENS[name](r.arg));
+  const body = top + (name === "settings" ? settings() : name === "help" ? helpScreen(S.auth.role, "#settings") : mod.SCREENS[name](r.arg));
   const net = !S.online || S.queue.length ? `<div class="netbar ${S.online ? "" : "off"}">${ic(S.online ? "cloud" : "off")}${S.online ? (S.syncing ? "Сохраняю в таблицу…" : `Ждут отправки: ${S.queue.length}`) : `Нет сети${S.queue.length ? ` · сохранится позже (${S.queue.length})` : " · показаны сохранённые данные"}`}</div>` : "";
   const tabs = mod.TABS.map(([t, icon, label, owns]) => `<a href="#${t}" aria-current="${owns.includes(name)}">${ic(icon)}${label}</a>`).join("");
   const side = `<div class="side-brand"><div class="mark" aria-hidden="true"><i></i><i></i><i></i><i></i></div><b>Железяка</b></div>`;
@@ -382,6 +389,7 @@ const MAIN_ACTIONS = {
     try { await e.prompt(); await e.userChoice; } catch (err) { /* закрыли окно */ }
   },
   "install-hide":() => { lsSet("installHide", true); },
+  "help-tab":d => { S.ui.helpTab = +d.v; const scr = $("#scr"); if (scr) scr.scrollTop = 0; },
   "video-open":d => openPlayer(d),
   "video-close":() => closePlayer(),
   sync:() => flush(),
