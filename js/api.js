@@ -85,7 +85,7 @@ export class DemoApi {
     const own = id => { if (who.role === "coach") return id; if (id && id !== who.clientId) throw new Error("Нет доступа к чужим данным"); return who.clientId; };
     let out;
     switch (action) {
-      case "login": out = {role:who.role, name:who.name, clientId:who.clientId || null}; break;
+      case "login": out = {role:who.role, name:who.name, clientId:who.clientId || null, coach:this.db.coachName}; break;
       case "bootstrap":
         if (who.role === "coach") out = {role:"coach", name:this.db.coachName, clients:this.db.clients.map(c => this.pub(c)), exercises:this.db.exercises,
           templates:this.db.templates.map(t => this.tplInfo(t)), notifications:this.db.notifications.slice(0, 30), settings:{email:false, telegram:false}};
@@ -140,6 +140,7 @@ export class DemoApi {
       case "notifications.read": coach(); this.db.notifications.forEach(n => { n.read = true; }); out = {notifications:this.db.notifications.slice(0, 30)}; break;
       case "check": coach(); { const msgs = this.db.clients.map(c => this.notify(c) && c.name).filter(Boolean); out = {checked:this.db.clients.length, messages:msgs}; } break;
       case "import": coach(); out = {exercisesAdded:0, report:["В демо-режиме данные уже загружены"]}; break;
+      case "video.import": case "video.status": coach(); throw new Error("В демо-режиме видео не переносится");
       default: throw new Error("Неизвестное действие: " + action);
     }
     this.save();

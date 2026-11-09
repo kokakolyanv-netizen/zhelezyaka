@@ -80,7 +80,12 @@ export function secTag(kind, title) {
   return `<span class="tag c-${c}"><i></i>${esc(title || t)}</span>`;
 }
 const direct = u => /\.(mp4|webm|m4v)(\?|$)/i.test(u || "");
+export const driveId = u => { const m = String(u || "").match(/drive\.google\.com\/(?:file\/d\/|open\?id=|uc\?(?:[^#]*&)?id=)([\w-]{20,})/); return m ? m[1] : null; };
 export function videoBlock(ex) {
+  const vid = ex && driveId(ex.videoUrl);
+  if (vid) return `<button class="video drive" data-act="video-open" data-vid="${esc(vid)}" data-title="${esc(ex.name || "")}" aria-label="Смотреть видео: ${esc(ex.name || "")}">
+    <span class="vthumb" style="background-image:url('https://drive.google.com/thumbnail?id=${esc(vid)}&sz=w720')"></span>
+    <span class="vplay">${ic("play")}</span><span class="vmeta"><span class="tag light">Видео тренера</span><span class="vnote">Нажмите, чтобы посмотреть технику</span></span></button>`;
   if (ex && ex.videoUrl && direct(ex.videoUrl)) return `<div class="video" data-st="ready"><video src="${esc(ex.videoUrl)}" controls loop muted playsinline preload="metadata"></video></div>`;
   const st = !ex || !ex.videoUrl ? "none" : ex.videoStatus === "broken" ? "broken" : "source";
   const txt = {source:["Видео тренера", "Откроется в новой вкладке. Ролик в формате mp4 будет играть прямо здесь."], broken:["Ссылка не открывается", "Тренеру нужно заменить видео в библиотеке."], none:["Видео пока нет", "Тренер может добавить его в библиотеке."]}[st];

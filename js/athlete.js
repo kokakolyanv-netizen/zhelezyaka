@@ -54,7 +54,7 @@ let ringShown = false;
 function today() {
   const p = prog();
   if (!D().me) return loadingState();
-  const hello = `<div class="eyebrow" style="margin-bottom:4px">Привет, ${esc(D().me.name)}</div>`;
+  const hello = "";   // имя и вход показывает плашка над экраном
   if (!p) return hello + emptyState("Программы пока нет", "Тренер ещё не назначил программу. Как только назначит, она появится здесь.");
   const ref = currentRef(), pr = programProgress(p, D().sessions), [kc, kt] = kindOf(p.kind);
   const week = ref ? ref.week : p.weeks;

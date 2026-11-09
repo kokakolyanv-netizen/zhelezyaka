@@ -1,9 +1,9 @@
 // Офлайн-кэш: приложение открывается без сети, данные берутся из сохранённой копии.
 // Запросы к серверу (Google Apps Script) не кэшируются: записи без сети копит очередь в самом приложении.
 // Свежая версия приложения: сначала сеть (до 1,5 с), без сети или на медленной — копия из кэша.
-const VERSION = "zhelezyaka-v4";
+const VERSION = "zhelezyaka-v5";
 const SHELL = ["./", "index.html", "config.js", "css/app.css", "manifest.webmanifest", "demo/seed.json",
-  "js/main.js", "js/state.js", "js/api.js", "js/util.js", "js/shared.js", "js/common.js", "js/athlete.js", "js/coach.js",
+  "js/main.js", "js/accounts.js", "js/state.js", "js/api.js", "js/util.js", "js/shared.js", "js/common.js", "js/athlete.js", "js/coach.js",
   "icons/icon.svg", "icons/icon-192.png", "icons/icon-512.png", "icons/apple-touch-icon.png"];
 
 self.addEventListener("install", e => {

@@ -34,6 +34,10 @@ const ICON = {
   sheet:'<rect x="4" y="3" width="16" height="18" rx="2.5"/><path d="M4 9h16M4 15h16M10 9v12"/>',
   save:'<path d="M5 4h11l3 3v12a1 1 0 0 1-1 1H6a1 1 0 0 1-1-1z"/><path d="M8 4v5h7V4M8 20v-6h8v6"/>',
   cloud:'<path d="M7 18a4.5 4.5 0 0 1-.5-9A6 6 0 0 1 18 9.5a4 4 0 0 1-.5 8.5z"/>',
+  swap:'<path d="M7 7h12l-3.5-3.5M17 17H5l3.5 3.5"/>',
+  install:'<path d="M12 4v11M7.5 10.5L12 15l4.5-4.5M5 20h14"/>',
+  sync:'<path d="M20 11a8 8 0 0 0-14.3-4.9L4 8M4 4v4h4M4 13a8 8 0 0 0 14.3 4.9L20 16M20 20v-4h-4"/>',
+  logout:'<path d="M14 4h5v16h-5M10 8l-4 4 4 4M6 12h10"/>',
   off:'<path d="M3 3l18 18M7 18a4.5 4.5 0 0 1-1.2-8.8M10 6.2A6 6 0 0 1 18 9.5a4 4 0 0 1 2 7.2"/>'
 };
 export const ic = (n, cls = "i") => `<svg class="${cls}" viewBox="0 0 24 24" aria-hidden="true">${ICON[n] || ""}</svg>`;
@@ -51,7 +55,7 @@ export const AVC = ["var(--blue)", "var(--red)", "var(--green)", "var(--yellow)"
 
 // Ссылки-приглашения: адрес приложения + сервер тренера (+ код подопечного)
 export function appUrl() { return location.origin + location.pathname.replace(/index\.html$/, ""); }
-export function serverUrl() { return lsGet("apiUrl") || (window.PODHOD || {}).apiUrl || ""; }
+export function serverUrl() { const a = lsGet("auth"); return (a && a.server) || lsGet("apiUrl") || (window.PODHOD || {}).apiUrl || ""; }
 export function inviteLink(code) {
   const p = new URLSearchParams();
   if (serverUrl()) p.set("s", serverUrl());
