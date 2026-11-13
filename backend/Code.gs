@@ -186,7 +186,7 @@ function ownClient_(who, clientId) {
   return who.clientId;
 }
 
-const WRITE_ACTIONS = ["client.add", "client.update", "program.save", "program.activate", "template.save", "template.assign", "template.delete",
+const WRITE_ACTIONS = ["client.add", "client.update", "program.save", "program.activate", "template.save", "template.assign", "template.delete", "program.copy",
   "exercise.save", "session.save", "measure.add", "notifications.read", "import", "check", "video.import", "video.stop", "video.restore"];
 
 const ACTIONS = {
@@ -203,6 +203,7 @@ const ACTIONS = {
   "template.save":(req, who) => { coachOnly_(who); return saveTemplate_(req.program, req.oldName); },
   "template.delete":(req, who) => { coachOnly_(who); return deleteTemplate_(req.name); },
   "template.assign":(req, who) => { coachOnly_(who); return assignTemplate_(req.name, req.clientId, req.title, req.startDate, req.activate); },
+  "program.copy":(req, who) => { coachOnly_(who); return copyProgram_(req.fromClientId, req.id, req.toClientId, req.title, req.startDate, req.activate); },
   "exercise.save":(req, who) => { coachOnly_(who); return saveExercise_(req.exercise); },
   "session.save":(req, who) => saveSession_(ownClient_(who, req.clientId), req.session),
   "measure.add":(req, who) => addMeasure_(ownClient_(who, req.clientId), req.measure),
@@ -399,8 +400,9 @@ function programRows_(p, base, extraFirst) {
   (p.notes || []).forEach(n => { rows.push(extraFirst.concat(["", "", "Примечание", "", "", "", "", n.text, "", n.kind || "rule", ""]).concat(new Array(W).fill(""))); colors.push("#F3F5F8"); });
   return {rows, colors, W};
 }
+function sheetTitle_(t) { return String(t || "").trim().replace(/[\[\]\*\?\/\\:]/g, "-").slice(0, 90); }
 function writeProgram_(ss, p, oldId) {
-  const title = String(p.title || "").trim().replace(/[\[\]\*\?\/\\:]/g, "-").slice(0, 90);
+  const title = sheetTitle_(p.title);
   if (!title) fail_("У программы нет названия");
   if ([SH.SESS, SH.LOG, SH.BODY].indexOf(title) >= 0) fail_("Это название занято служебным листом");
   let sh = oldId ? ss.getSheetByName(oldId) : null;
@@ -438,6 +440,8 @@ function markActive_(ss, id, startDate) {
 }
 function saveProgram_(clientId, p, oldId, activate) {
   const c = client_(clientId), ss = SpreadsheetApp.openById(c.sheetId);
+  const nt = sheetTitle_(p.title);
+  if (!oldId && nt && [SH.SESS, SH.LOG, SH.BODY].indexOf(nt) < 0 && ss.getSheetByName(nt)) fail_("Программа «" + sheetTitle_(p.title) + "» уже есть у этого подопечного. Назовите программу иначе.");
   const sh = writeProgram_(ss, p, oldId);
   if (oldId && c.active === oldId && oldId !== sh.getName()) c.active = sh.getName();
   if (activate) { c.active = sh.getName(); c.startDate = p.startDate || day_(new Date()); c.notified = ""; markActive_(ss, c.active, c.startDate); }
@@ -516,13 +520,25 @@ function deleteTemplate_(name) {
   return {templates:listTemplates_()};
 }
 function assignTemplate_(name, clientId, title, startDate, activate) {
-  const p = getTemplate_(name);
+  return placeProgram_(getTemplate_(name), clientId, title || name, startDate, activate);
+}
+// Программа, написанная для одного подопечного, — другому (или ему же, копией)
+function copyProgram_(fromClientId, id, toClientId, title, startDate, activate) {
+  const src = client_(fromClientId);
+  const p = readProgram_(programSheet_(SpreadsheetApp.openById(src.sheetId), id));
+  return placeProgram_(p, toClientId, title || p.title, startDate, activate);
+}
+function placeProgram_(p, clientId, title, startDate, activate) {
   const c = client_(clientId), ss = SpreadsheetApp.openById(c.sheetId);
-  let t = String(title || name).trim(), n = 2;
-  while (ss.getSheetByName(t)) t = String(title || name).trim() + " (" + (n++) + ")";
+  const base = sheetTitle_(title) || "Программа";
+  let t = base, n = 2;
+  while (ss.getSheetByName(t) || [SH.SESS, SH.LOG, SH.BODY].indexOf(t) >= 0) t = base + " (" + (n++) + ")";
   p.title = t; p.startDate = startDate || ""; p.status = activate ? "текущая" : "";
   let k = 0;
-  p.workouts.forEach(w => w.sections.forEach(s => s.items.forEach(it => { it.id = "i" + Utilities.getUuid().slice(0, 8) + (k++); })));
+  p.workouts.forEach(w => w.sections.forEach(s => s.items.forEach(it => {
+    it.id = "i" + Utilities.getUuid().slice(0, 8) + (k++);
+    Object.keys(it.targets || {}).forEach(w2 => { if (it.targets[w2]) delete it.targets[w2].history; });   // «было: …» — чужие веса
+  })));
   const sh = writeProgram_(ss, p, null);
   if (activate) { c.active = sh.getName(); c.startDate = startDate || day_(new Date()); c.notified = ""; markActive_(ss, c.active, c.startDate); }
   refreshSummary_(c, ss);

@@ -13,15 +13,22 @@ function load() {
 const inline = s => esc(s).replace(/\*\*(.+?)\*\*/g, "<b>$1</b>").replace(/`([^`]+)`/g, "<code>$1</code>");
 function parse(src) {
   const tabs = [];
-  let tab = null, sec = null, list = null;
-  const close = () => { if (sec && list) sec.html += `</${list}>`; list = null; };
+  let tab = null, sec = null, list = null, sub = false;
+  const closeSub = () => { if (sec && sub) sec.html += "</ul></li>"; sub = false; };
+  const close = () => { closeSub(); if (sec && list) sec.html += `</${list}>`; list = null; };
   for (const raw of src.split(/\r?\n/)) {
     const line = raw.trimEnd();
     let m;
     if (line.startsWith("# ")) { close(); tab = {title:line.slice(2), sections:[]}; tabs.push(tab); sec = null; continue; }
     if (line.startsWith("## ") && tab) { close(); sec = {title:line.slice(3), html:""}; tab.sections.push(sec); continue; }
     if (!sec) continue;
+    if ((m = line.match(/^\s+- (.*)/)) && list) {   // вложенный пункт — внутрь предыдущего
+      if (!sub) { sec.html = sec.html.replace(/<\/li>$/, "") + "<ul>"; sub = true; }
+      sec.html += `<li>${inline(m[1])}</li>`;
+      continue;
+    }
     if ((m = line.match(/^- (.*)/)) || (m = line.match(/^\d+\. (.*)/))) {
+      closeSub();
       const kind = line.startsWith("- ") ? "ul" : "ol";
       if (list !== kind) { close(); sec.html += `<${kind}>`; list = kind; }
       sec.html += `<li>${inline(m[1])}</li>`;

@@ -435,3 +435,13 @@ body.noscroll{overflow:hidden}
 .hbody ul,.hbody ol{margin:4px 0;padding-left:20px}
 .hbody li{margin:5px 0}
 .hbody code{font-family:var(--f-mono);font-size:12.5px;background:var(--surface-2);border-radius:6px;padding:1px 5px}
+
+/* готовая программа: выбор «подопечный → программа», панель «другому / в шаблоны» */
+.pick2{display:grid;gap:8px}
+@media (min-width:560px){.pick2{grid-template-columns:1fr 1.4fr}}
+.fi.muted{color:var(--ink-3);background:var(--surface-2)}
+.pact{margin:2px 0 10px;padding:12px;background:var(--surface-2);border-radius:16px}
+.pact .ch{display:inline-flex;align-items:center;gap:6px}
+.pact .ch svg{width:15px;height:15px}
+.mini-btn[aria-pressed="true"]{background:var(--ink);color:var(--bg)}
+.pact .btn.ghost{background:var(--surface)}

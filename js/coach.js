@@ -15,11 +15,19 @@ const pdKey = () => "pd." + accKey(S.auth);
 function savePd() { lsSet(pdKey(), U.pd || null); }
 export function restore() { U.pd = lsGet(pdKey()); U.cweek = 1; U.allWeeks = true; U.sel = []; }
 
-async function loadClient(id, force) {
-  if (!force && cc(id)) return;
-  S.data.cc = D().cc || {};
-  try { S.data.cc[id] = await act("client.get", {clientId:id}); } catch (e) { /* сообщение уже показано */ }
-  schedule();
+const loadingCl = new Map(), clFail = new Set();
+function loadClient(id, force) {
+  if (!id) return Promise.resolve();
+  if (loadingCl.has(id)) return loadingCl.get(id);
+  if (!force && cc(id)) return Promise.resolve();
+  const job = (async () => {
+    S.data.cc = D().cc || {};
+    try { S.data.cc[id] = await act("client.get", {clientId:id}); clFail.delete(id); }
+    catch (e) { clFail.add(id); /* сообщение уже показано */ }
+    finally { loadingCl.delete(id); schedule(); }
+  })();
+  loadingCl.set(id, job);
+  return job;
 }
 // тихо обновить список подопечных, шаблоны и уведомления (без индикатора)
 let refreshing = false;
@@ -92,7 +100,9 @@ function client(id) {
       : `<div class="card">${emptyState("Программа не назначена", "Соберите программу с нуля или из шаблона.")}<button class="btn block" data-act="np-open" data-cid="${esc(id)}">${ic("plus")}Новая программа</button></div>`}
     ${np ? newProgramForm(id, data) : ""}
     <div class="card"><h4>Все программы</h4>${(data.programs || []).length ? data.programs.map(x => `<div class="rec"><span>${esc(x.title)}<small style="display:block;color:var(--ink-3)">${x.weeks} нед.${x.startDate ? " · старт " + esc(dshort(x.startDate)) : ""}</small></span>
-        <span class="row" style="gap:6px">${x.id === c.active ? `<span class="tag c-g"><i></i>текущая</span>` : `<button class="mini-btn" data-act="p-activate" data-cid="${esc(id)}" data-id="${esc(x.id)}">Сделать текущей</button>`}<button class="mini-btn" data-act="d-edit" data-cid="${esc(id)}" data-id="${esc(x.id)}">${ic("build")}</button></span></div>`).join("") : `<div class="small muted">Пока нет</div>`}</div>
+        <span class="row" style="gap:6px">${x.id === c.active ? `<span class="tag c-g"><i></i>текущая</span>` : `<button class="mini-btn" data-act="p-activate" data-cid="${esc(id)}" data-id="${esc(x.id)}">Сделать текущей</button>`}<button class="mini-btn" data-act="d-edit" data-cid="${esc(id)}" data-id="${esc(x.id)}" aria-label="Изменить ${esc(x.title)}">${ic("build")}</button>
+        <button class="mini-btn" data-act="pa-open" data-cid="${esc(id)}" data-id="${esc(x.id)}" aria-pressed="${!!(U.pact && U.pact.cid === id && U.pact.id === x.id)}" aria-label="Другому подопечному или в шаблоны" title="Другому подопечному или в шаблоны">${ic("copy")}</button></span></div>
+        ${U.pact && U.pact.cid === id && U.pact.id === x.id ? progActions(id, x) : ""}`).join("") : `<div class="small muted">Пока нет</div>`}</div>
     <div class="card"><h4>Тело</h4>${lastM ? `<div class="kv"><span>Дата</span><b>${esc(dshort(lastM.date))}</b>${[["weight", "Вес", "кг"], ["fat", "Жир", "%"], ["muscle", "Мышцы", "%"], ["bone", "Кости", "%"], ["waist", "Талия", "см"], ["hips", "Ягодицы", "см"], ["chest", "Грудь", "см"]].filter(([k]) => lastM[k] != null).map(([k, l, u]) => `<span>${l}</span><b>${fnum(lastM[k])} ${u}</b>`).join("")}</div>
       <div class="chart" style="margin-top:8px">${sparkline(ms.map(m => ({x:dshort(m.date), y:m.weight})), "кг")}</div>` : `<div class="small muted">Замеров пока нет</div>`}</div>
     <div class="card"><h4>Последние тренировки</h4>${recent.length ? recent.map(s => { const sets = (s.sets || []).filter(x => !x.skipped), ton = sets.reduce((a, x) => a + (x.weightKg || 0) * (x.reps || 0), 0);
@@ -101,14 +111,72 @@ function client(id) {
 }
 function newProgramForm(id, data) {
   const np = U.np, tpls = D().templates || [];
+  if (np.mode === "copy" && !np.srcCid) np.srcCid = (data.programs || []).length ? id : ((D().clients || []).find(c => c.active) || {}).id || id;
   return `<div class="card stack"><h4>Новая программа</h4>
-    <div class="chipset">${[["blank", "С нуля"], ["template", "Из шаблона"], ["copy", "Копия текущей"]].map(([m, l]) => `<button class="ch" data-act="np-mode" data-m="${m}" aria-pressed="${np.mode === m}" ${m === "copy" && !data.program ? "disabled" : ""} ${m === "template" && !tpls.length ? "disabled" : ""}>${l}</button>`).join("")}</div>
+    <div class="chipset">${[["blank", "С нуля"], ["template", "Из шаблона"], ["copy", "Копия программы"]].map(([m, l]) => `<button class="ch" data-act="np-mode" data-m="${m}" aria-pressed="${np.mode === m}" ${m === "template" && !tpls.length ? "disabled" : ""}>${l}</button>`).join("")}</div>
     ${np.mode === "template" ? `<label class="mf"><span>Шаблон</span><select class="fi" id="np-tpl">${tpls.map(t => `<option value="${esc(t.name)}" ${np.tpl === t.name ? "selected" : ""}>${esc(t.name)} · ${t.weeks} нед., ${t.workouts} трен.</option>`).join("")}</select></label>` : ""}
-    <label class="mf"><span>Название</span><input class="fi" id="np-title" placeholder="Например: Сила, блок 3" value="${esc(np.title || "")}"></label>
+    ${np.mode === "copy" ? progPicker("np-src", {cid:np.srcCid, pid:np.srcPid}) + `<p class="small muted" style="margin:0">Любая готовая программа: этого подопечного или другого. Веса «было: …» не копируются.</p>` : ""}
+    <label class="mf"><span>Название</span><input class="fi" id="np-title" placeholder="${np.mode === "copy" ? "Как у исходной программы" : "Например: Сила, блок 3"}" value="${esc(np.title || "")}"></label>
     ${np.mode === "blank" ? `<div class="row"><label class="mf" style="flex:1"><span>Недель</span><input class="fi" id="np-weeks" type="number" min="1" max="12" value="${np.weeks || 4}"></label><label class="mf" style="flex:1"><span>Тренировок в неделю</span><input class="fi" id="np-wos" type="number" min="1" max="7" value="${np.wos || 3}"></label></div>` : ""}
     <label class="mf"><span>Старт</span><input class="fi" id="np-start" type="date" value="${esc(np.start || todayISO())}"></label>
-    <div class="row"><button class="btn ghost" data-act="np-close">Отмена</button><button class="btn" style="flex:1" data-act="np-build" ${busy("template.get")}>${ic("build")}Открыть в конструкторе</button></div>
+    <div class="row"><button class="btn ghost" data-act="np-close">Отмена</button><button class="btn" style="flex:1" data-act="np-build" ${busy("template.get")} ${busy("program.get")}>${ic("build")}Открыть в конструкторе</button></div>
     <p class="small muted" style="margin:0">В таблицу подопечного программа попадёт, когда вы нажмёте «Сохранить» в конструкторе.</p></div>`;
+}
+
+/* ───────── Готовая программа любого подопечного ───────── */
+function srcProgs(cid) { const d = cid && cc(cid); return d ? (d.programs || []) : null; }
+function pickedPid(st) {
+  const progs = srcProgs(st.cid); if (!progs || !progs.length) return null;
+  if (st.pid && progs.some(x => x.id === st.pid)) return st.pid;
+  const cur = (cc(st.cid).client || {}).active;
+  return progs.some(x => x.id === cur) ? cur : progs[0].id;
+}
+function progPicker(key, st) {
+  const cl = D().clients || [];
+  if (st.cid && !cc(st.cid) && !clFail.has(st.cid)) loadClient(st.cid);
+  const progs = srcProgs(st.cid), pid = pickedPid(st);
+  const progField = progs == null
+    ? `<div class="fi muted">${clFail.has(st.cid) ? "Не загрузилось. Выберите подопечного ещё раз." : "Загружаю программы…"}</div>`
+    : progs.length ? `<select class="fi" id="${key}-p">${progs.map(x => `<option value="${esc(x.id)}" ${x.id === pid ? "selected" : ""}>${esc(x.title)} · ${x.weeks} нед.${x.status === "текущая" ? " · текущая" : ""}</option>`).join("")}</select>`
+    : `<div class="fi muted">У этого подопечного программ пока нет</div>`;
+  return `<div class="pick2"><label class="mf"><span>Чья программа</span><select class="fi" id="${key}-c">${cl.map(c => `<option value="${esc(c.id)}" ${c.id === st.cid ? "selected" : ""}>${esc(c.name)}</option>`).join("")}</select></label>
+    <label class="mf"><span>Программа</span>${progField}</label></div>`;
+}
+// свободное название программы у подопечного: «Сила», «Сила (2)»…
+async function freeTitle(cid, base) {
+  if (!cc(cid)) await loadClient(cid, true);
+  const used = new Set(((cc(cid) || {}).programs || []).map(x => x.id));
+  base = String(base || "Программа").trim();
+  let t = base, n = 2;
+  while (used.has(t)) t = base + " (" + (n++) + ")";
+  return t;
+}
+// перед тем как открыть в конструкторе новое — не потерять несохранённое
+function draftFree() {
+  if (U.pd && U.pd.dirty && U.confirm !== "drop") { U.confirm = "drop"; toast("В конструкторе есть несохранённые изменения. Нажмите ещё раз, чтобы открыть другое"); return false; }
+  U.confirm = null; return true;
+}
+// панель у программы в карточке: отдать другому подопечному или сохранить шаблоном
+function progActions(cid, x) {
+  const pa = U.pact, cl = D().clients || [];
+  const head = `<div class="pact"><div class="chipset"><button class="ch" data-act="pa-mode" data-m="give" aria-pressed="${pa.mode === "give"}">${ic("users")}Другому подопечному</button>
+    <button class="ch" data-act="pa-mode" data-m="tpl" aria-pressed="${pa.mode === "tpl"}">${ic("copy")}В шаблоны</button><button class="ch" data-act="pa-x">Отмена</button></div>`;
+  if (pa.mode === "tpl") return head + `<div class="inl" style="margin-top:10px"><label class="mf"><span>Название шаблона</span><input class="fi" id="pa-tname" value="${esc(pa.tname != null ? pa.tname : x.title)}"></label>
+    <button class="btn block" data-act="pa-tpl-go" ${busy("template.save")}>${ic("copy")}${S.ui.busy === "template.save" ? "Сохраняю…" : "Сохранить шаблон"}</button>
+    <p class="small muted" style="margin:0">Шаблон можно назначить любому подопечному на вкладке «Шаблоны». Веса «было: …» в шаблон не попадают.</p></div></div>`;
+  return head + `<div class="inl" style="margin-top:10px">
+    <label class="mf"><span>Кому</span><select class="fi" id="pa-to">${cl.map(c => `<option value="${esc(c.id)}" ${c.id === pa.to ? "selected" : ""}>${esc(c.name)}${c.id === cid ? " — копия ему же" : ""}</option>`).join("")}</select></label>
+    <label class="mf"><span>Название у подопечного</span><input class="fi" id="pa-title" value="${esc(pa.title != null ? pa.title : x.title)}"></label>
+    <label class="mf"><span>Старт</span><input class="fi" id="pa-start" type="date" value="${esc(pa.start || todayISO())}"></label>
+    <label class="small row" style="gap:6px"><input type="checkbox" id="pa-active" ${pa.active === false ? "" : "checked"}>сразу сделать текущей</label>
+    <button class="btn go block" data-act="pa-give-go" ${busy("program.copy")}>${ic("check")}${S.ui.busy === "program.copy" ? "Записываю в таблицу…" : "Назначить"}</button>
+    <button class="btn ghost block" data-act="pa-give-edit" ${busy("program.get")}>${ic("build")}Изменить перед назначением</button>
+    <p class="small muted" style="margin:0">«Назначить» сразу запишет копию в таблицу подопечного. «Изменить перед назначением» откроет копию в конструкторе: поправьте и нажмите «Сохранить в таблицу». Веса «было: …» не копируются.</p></div></div>`;
+}
+function keepPactInputs() {
+  const pa = U.pact; if (!pa) return;
+  const v = id => { const el = document.getElementById(id); return el ? (el.type === "checkbox" ? el.checked : el.value) : undefined; };
+  [["pa-to", "to"], ["pa-title", "title"], ["pa-start", "start"], ["pa-active", "active"], ["pa-tname", "tname"]].forEach(([id, k]) => { const x = v(id); if (x !== undefined) pa[k] = x; });
 }
 
 /* ───────── Конструктор ───────── */
@@ -232,6 +300,11 @@ function templates() {
   const a = U.assign;
   return `<div class="nav"><h3 class="d">Шаблоны</h3><button class="btn" style="padding:9px 12px" data-act="t-new">${ic("plus")}Новый</button></div>
     <p class="small muted" style="margin-top:-4px">Собранная программа, которую можно выдать любому подопечному. Хранятся в мастер-таблице на листе «Шаблоны».</p>
+    ${U.tplFrom ? `<div class="card stack" style="margin-bottom:12px"><h4>Шаблон из программы подопечного</h4>${progPicker("tf", U.tplFrom)}
+      <label class="mf"><span>Название шаблона</span><input class="fi" id="tf-name" placeholder="Как у программы" value="${esc(U.tplFrom.name || "")}"></label>
+      <div class="row"><button class="btn ghost" data-act="tf-x">Отмена</button><button class="btn" style="flex:1" data-act="tf-go" ${busy("template.save")} ${busy("program.get")}>${ic("copy")}${S.ui.busy === "template.save" ? "Сохраняю…" : "Сохранить шаблон"}</button></div>
+      <p class="small muted" style="margin:0">Программа подопечного не меняется. Веса «было: …» в шаблон не попадают.</p></div>`
+      : `<button class="btn ghost block" style="margin-bottom:12px" data-act="tf-open">${ic("users")}Шаблон из программы подопечного</button>`}
     <div class="stack">${list.length ? list.map(t => `<div class="card"><div class="row between"><div><b>${esc(t.name)}</b><div class="small muted">${t.weeks} нед. · ${t.workouts} ${plural(t.workouts, "тренировка", "тренировки", "тренировок")} · ${t.items} ${plural(t.items, "упражнение", "упражнения", "упражнений")}</div></div>
         <button class="del ${U.confirm === "tpl:" + t.name ? "arm" : ""}" data-act="t-del" data-name="${esc(t.name)}" aria-label="Удалить шаблон">${U.confirm === "tpl:" + t.name ? "Удалить?" : ic("trash")}</button></div>
         <div class="row" style="margin-top:10px"><button class="btn ghost" style="flex:1" data-act="t-open" data-name="${esc(t.name)}">${ic("build")}Открыть</button><button class="btn" style="flex:1" data-act="t-assign" data-name="${esc(t.name)}">${ic("users")}Назначить</button></div>
@@ -239,7 +312,10 @@ function templates() {
           <label class="mf"><span>Название у подопечного</span><input class="fi" id="as-title" value="${esc(t.name)}"></label>
           <label class="mf"><span>Старт</span><input class="fi" id="as-start" type="date" value="${todayISO()}"></label>
           <label class="small row" style="gap:6px"><input type="checkbox" id="as-active" checked>сразу сделать текущей</label>
-          <div class="row"><button class="btn ghost" data-act="t-assign-x">Отмена</button><button class="btn go" style="flex:1" data-act="t-assign-go" ${busy("template.assign")}>${S.ui.busy === "template.assign" ? "Записываю в таблицу…" : "Назначить"}</button></div></div>` : ""}</div>`).join("")
+          <button class="btn go block" data-act="t-assign-go" ${busy("template.assign")}>${ic("check")}${S.ui.busy === "template.assign" ? "Записываю в таблицу…" : "Назначить"}</button>
+          <button class="btn ghost block" data-act="ta-edit" ${busy("template.get")}>${ic("build")}Изменить перед назначением</button>
+          <button class="btn line block" data-act="t-assign-x">Отмена</button>
+          <p class="small muted" style="margin:0">«Изменить перед назначением» откроет копию шаблона в конструкторе для этого подопечного. Сам шаблон не меняется.</p></div>` : ""}</div>`).join("")
       : emptyState("Шаблонов пока нет", "Соберите программу в конструкторе и сохраните её как шаблон, или создайте новый шаблон.")}</div>`;
 }
 
@@ -281,19 +357,25 @@ function startDraft(pd) { U.pd = pd; U.cwid = pd.program.workouts[0] && pd.progr
 function freshIds(p) { p.workouts.forEach(w => w.sections.forEach(s => s.items.forEach(it => { it.id = uid("i"); Object.values(it.targets || {}).forEach(t => { delete t.history; }); }))); return p; }
 async function buildNew() {
   const np = U.np, data = cc(np.clientId);
-  const title = (document.getElementById("np-title") || {}).value || "", start = (document.getElementById("np-start") || {}).value || todayISO();
-  if (!title.trim()) { toast("Назовите программу"); return; }
-  if (((data && data.programs) || []).some(x => x.id === title.trim())) { toast("Программа с таким названием уже есть"); return; }
+  let title = ((document.getElementById("np-title") || {}).value || "").trim();
+  const start = (document.getElementById("np-start") || {}).value || todayISO();
+  if (!title && np.mode !== "copy") { toast("Назовите программу"); return; }
+  if (title && ((data && data.programs) || []).some(x => x.id === title)) { toast("Программа с таким названием уже есть"); return; }
+  if (!draftFree()) return;
   let program;
   if (np.mode === "template") {
     const name = (document.getElementById("np-tpl") || {}).value;
     try { program = freshIds(await act("template.get", {name})); } catch (e) { return; }
-  } else if (np.mode === "copy") program = freshIds(clone(data.program));
-  else {
+  } else if (np.mode === "copy") {
+    const cid = (document.getElementById("np-src-c") || {}).value || np.srcCid, pid = (document.getElementById("np-src-p") || {}).value;
+    if (!pid) { toast("Выберите программу"); return; }
+    try { program = freshIds(await act("program.get", {clientId:cid, id:pid})); } catch (e) { return; }
+    if (!title) title = await freeTitle(np.clientId, program.title);
+  } else {
     const weeks = Math.min(12, Math.max(1, +(document.getElementById("np-weeks") || {}).value || 4)), wos = Math.min(7, Math.max(1, +(document.getElementById("np-wos") || {}).value || 3));
     program = {weeks, notes:[], workouts:Array.from({length:wos}, (_, i) => ({id:"Тренировка " + (i + 1), title:"Тренировка " + (i + 1), sections:newSections()}))};
   }
-  program.id = null; program.title = title.trim(); program.startDate = start; program.status = "";
+  program.id = null; program.title = title; program.startDate = start; program.status = "";
   U.np = null;
   startDraft({kind:"client", clientId:np.clientId, oldId:null, program, dirty:true, activate:true});
 }
@@ -363,9 +445,64 @@ export const ACTIONS = {
     try { const c = await act("client.add", {name, contact}, "Подопечный добавлен, таблица создана"); putClientSummary(c); U.newClient = c; } catch (e) { /* */ }
   },
   "c-refresh":d => loadClient(d.cid, true),
-  "np-open":d => { U.np = {clientId:d.cid, mode:(D().templates || []).length ? "template" : "blank"}; if (location.hash !== "#client/" + d.cid) location.hash = "#client/" + d.cid; },
+  "np-open":d => { U.np = {clientId:d.cid, mode:(D().templates || []).length ? "template" : (D().clients || []).some(c => c.active) ? "copy" : "blank"}; if (location.hash !== "#client/" + d.cid) location.hash = "#client/" + d.cid; },
   "np-mode":d => { if (U.np) { U.np.title = (document.getElementById("np-title") || {}).value || U.np.title; U.np.mode = d.m; } },
   "np-close":() => { U.np = null; },
+  /* программа → другому подопечному или в шаблоны */
+  "pa-open":d => { if (U.pact && U.pact.cid === d.cid && U.pact.id === d.id) { U.pact = null; return; }
+    const other = (D().clients || []).find(c => c.id !== d.cid); U.pact = {cid:d.cid, id:d.id, mode:"give", to:other ? other.id : d.cid}; },
+  "pa-mode":d => { if (U.pact) { keepPactInputs(); U.pact.mode = d.m; } },
+  "pa-x":() => { U.pact = null; },
+  "pa-give-go":async () => {
+    const pa = U.pact; if (!pa) return; keepPactInputs();
+    const to = (D().clients || []).find(c => c.id === pa.to) || {};
+    try {
+      const r = await act("program.copy", {fromClientId:pa.cid, id:pa.id, toClientId:pa.to, title:String(pa.title || "").trim() || null, startDate:pa.start || todayISO(), activate:pa.active !== false});
+      toast(`«${r.program.title}» записана в таблицу: ${to.name || "подопечный"}`);
+      putClientSummary(r.client); U.pact = null; loadClient(pa.to, true); refreshCoach();
+    } catch (e) { /* показано */ }
+  },
+  "pa-give-edit":async () => {
+    const pa = U.pact; if (!pa) return; keepPactInputs(); if (!draftFree()) return;
+    try {
+      const p = freshIds(await act("program.get", {clientId:pa.cid, id:pa.id}));
+      p.id = null; p.title = await freeTitle(pa.to, String(pa.title || "").trim() || p.title); p.startDate = pa.start || todayISO(); p.status = "";
+      U.pact = null;
+      startDraft({kind:"client", clientId:pa.to, oldId:null, program:p, dirty:true, activate:pa.active !== false});
+    } catch (e) { /* показано */ }
+  },
+  "pa-tpl-go":async () => {
+    const pa = U.pact; if (!pa) return; keepPactInputs();
+    try {
+      const p = freshIds(await act("program.get", {clientId:pa.cid, id:pa.id})); p.title = String(pa.tname || "").trim() || p.title;
+      const res = await act("template.save", {program:p, oldName:null}, "Шаблон сохранён: " + p.title);
+      S.data.templates = res.templates; U.pact = null;
+    } catch (e) { /* показано */ }
+  },
+  "ta-edit":async () => {
+    const a = U.assign; if (!a || !draftFree()) return;
+    const clientId = document.getElementById("as-client").value, title0 = document.getElementById("as-title").value.trim();
+    const startDate = document.getElementById("as-start").value || todayISO(), activate = document.getElementById("as-active").checked;
+    try {
+      const p = freshIds(await act("template.get", {name:a.name}));
+      p.id = null; p.title = await freeTitle(clientId, title0 || a.name); p.startDate = startDate; p.status = "";
+      U.assign = null;
+      startDraft({kind:"client", clientId, oldId:null, program:p, dirty:true, activate});
+    } catch (e) { /* показано */ }
+  },
+  "tf-open":() => { const c = (D().clients || []).find(x => x.active) || (D().clients || [])[0]; U.tplFrom = {cid:c ? c.id : null, pid:null, name:""}; },
+  "tf-x":() => { U.tplFrom = null; },
+  "tf-go":async () => {
+    const tf = U.tplFrom; if (!tf) return;
+    const cid = (document.getElementById("tf-c") || {}).value || tf.cid, pid = (document.getElementById("tf-p") || {}).value;
+    const name = ((document.getElementById("tf-name") || {}).value || "").trim();
+    if (!pid) { toast("Выберите программу"); return; }
+    try {
+      const p = freshIds(await act("program.get", {clientId:cid, id:pid})); p.title = name || p.title;
+      const res = await act("template.save", {program:p, oldName:null}, "Шаблон сохранён: " + p.title);
+      S.data.templates = res.templates; U.tplFrom = null;
+    } catch (e) { /* показано */ }
+  },
   "np-build":buildNew,
   "p-activate":async d => { try { const c = await act("program.activate", {clientId:d.cid, id:d.id}, "Программа стала текущей"); putClientSummary(c); loadClient(d.cid, true); } catch (e) { /* */ } },
   "d-edit":async d => {
@@ -453,6 +590,9 @@ export const ACTIONS = {
 function curItemId() { return decodeURIComponent(location.hash.split("/")[1] || ""); }
 
 export function onInput(el) {
+  if (el.id === "np-title" && U.np) { U.np.title = el.value; return true; }
+  if (el.id === "tf-name" && U.tplFrom) { U.tplFrom.name = el.value; return true; }
+  if (/^pa-/.test(el.id) && U.pact) { keepPactInputs(); return true; }
   if (el.id === "pk-q") { U.pickQ = el.value; filter("#pk-list", el.value); return true; }
   if (el.id === "lib-q") { U.libQ = el.value; filter("#lib-list", el.value); return true; }
   if (U.lib && el.id === "lf-name") { U.lib.name = el.value; return true; }
@@ -462,6 +602,11 @@ export function onInput(el) {
 }
 export function onChange(el) {
   const p = pdp();
+  if (el.id === "np-src-c" && U.np) { U.np.srcCid = el.value; U.np.srcPid = null; clFail.delete(el.value); loadClient(el.value); return true; }
+  if (el.id === "np-src-p" && U.np) { U.np.srcPid = el.value; return true; }
+  if (el.id === "tf-c" && U.tplFrom) { U.tplFrom.cid = el.value; U.tplFrom.pid = null; clFail.delete(el.value); loadClient(el.value); return true; }
+  if (el.id === "tf-p" && U.tplFrom) { U.tplFrom.pid = el.value; return true; }
+  if (/^pa-/.test(el.id) && U.pact) { keepPactInputs(); return true; }
   if (el.id === "b-ptitle" && p) { p.title = el.value.trim(); dirty(); return true; }
   if (el.id === "b-wtitle" && p) { const wo = curWo(); if (wo && el.value.trim()) { wo.title = ensureUniqueTitle(p, el.value.trim(), wo.id); dirty(); } return true; }
   if (el.id === "i-cues" && p) { const f = findItem(p, curItemId()); if (f) { f.it.cues = el.value.trim() || null; dirty(); } return true; }

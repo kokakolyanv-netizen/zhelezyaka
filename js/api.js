@@ -101,7 +101,9 @@ export class DemoApi {
       case "client.update": { coach(); const c = this.client(body.clientId); Object.assign(c, body.patch || {}); out = this.pub(c); break; }
       case "program.get": { const cid = own(body.clientId); const p = this.progs(cid).find(x => x.id === body.id); if (!p) throw new Error("Программа не найдена"); out = p; break; }
       case "program.save": {
-        coach(); const c = this.client(body.clientId), doc = this.putProgram(c.id, body.program, body.oldId);
+        coach(); const c = this.client(body.clientId);
+        if (!body.oldId && this.progs(c.id).some(x => x.id === String(body.program.title || "").trim())) throw new Error(`Программа «${String(body.program.title).trim()}» уже есть у этого подопечного. Назовите программу иначе.`);
+        const doc = this.putProgram(c.id, body.program, body.oldId);
         if (body.activate) { c.active = doc.id; c.startDate = body.program.startDate || todayISO(); c.notified = ""; }
         this.notify(c); out = {program:doc, client:this.pub(c)}; break;
       }
@@ -121,6 +123,16 @@ export class DemoApi {
         while (this.progs(c.id).some(p => p.id === title)) title = String(body.title || body.name).trim() + ` (${n++})`;
         const p = clone(t); p.title = title; p.startDate = body.startDate || null;
         p.workouts.forEach(w => w.sections.forEach(s => s.items.forEach(it => { it.id = "i" + Math.random().toString(36).slice(2, 10); })));
+        const doc = this.putProgram(c.id, p, null);
+        if (body.activate) { c.active = doc.id; c.startDate = body.startDate || todayISO(); c.notified = ""; }
+        out = {program:doc, client:this.pub(c)}; break;
+      }
+      case "program.copy": {
+        coach(); const src = this.progs(body.fromClientId).find(x => x.id === body.id); if (!src) throw new Error("Программа не найдена");
+        const c = this.client(body.toClientId), base = String(body.title || src.title).trim(); let title = base, n = 2;
+        while (this.progs(c.id).some(p => p.id === title)) title = base + ` (${n++})`;
+        const p = clone(src); p.title = title; p.startDate = body.startDate || null;
+        p.workouts.forEach(w => w.sections.forEach(s => s.items.forEach(it => { it.id = "i" + Math.random().toString(36).slice(2, 10); Object.values(it.targets || {}).forEach(t => { delete t.history; }); })));
         const doc = this.putProgram(c.id, p, null);
         if (body.activate) { c.active = doc.id; c.startDate = body.startDate || todayISO(); c.notified = ""; }
         out = {program:doc, client:this.pub(c)}; break;
